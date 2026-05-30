@@ -12,7 +12,7 @@ const props = withDefaults(
     theme?: SlideTheme;
     selectedIndex?: number;
   }>(),
-  { selectedIndex: 0 },
+  { selectedIndex: 0, theme: () => defaultTheme },
 );
 
 const emit = defineEmits<{
@@ -33,7 +33,6 @@ const setIndex = (i: number) => {
   emit("update:selectedIndex", i);
 };
 
-const effectiveTheme = computed(() => props.theme ?? defaultTheme);
 const selectedSlide = computed<SlideLayout | undefined>(() => props.slides[internalIndex.value]);
 
 const emitSlides = (next: SlideLayout[]) => emit("update:slides", next);
@@ -67,7 +66,7 @@ const removeSlide = (i: number) => {
       <DeckList :slides="slides" :selected-index="internalIndex" @select="setIndex" @add="addSlide" @remove="removeSlide" />
     </aside>
     <main class="flex-1 min-w-0 bg-stone-100">
-      <SlidePreview v-if="selectedSlide" :slide="selectedSlide" :theme="effectiveTheme" />
+      <SlidePreview v-if="selectedSlide" :slide="selectedSlide" :theme="theme" />
       <div v-else class="flex h-full items-center justify-center text-stone-400">No slide selected</div>
     </main>
     <aside class="w-80 shrink-0 border-l border-stone-200 bg-white overflow-y-auto">
