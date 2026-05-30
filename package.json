@@ -1,0 +1,49 @@
+{
+  "name": "mulmocast-deck-web",
+  "version": "0.1.0",
+  "description": "Browser-side live editor for @mulmocast/deck",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/receptron/mulmocast-deck-web.git"
+  },
+  "bugs": {
+    "url": "https://github.com/receptron/mulmocast-deck-web/issues"
+  },
+  "homepage": "https://github.com/receptron/mulmocast-deck-web#readme",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "preview": "vite preview",
+    "lint": "eslint src",
+    "format": "prettier --write 'src/**/*.{ts,vue,css}'"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {
+    "@mulmocast/deck": "^0.1.2",
+    "vue": "^3.5.34"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@tailwindcss/vite": "^4.3.0",
+    "@types/node": "^24.12.3",
+    "@vitejs/plugin-vue": "^6.0.6",
+    "@vue/tsconfig": "^0.9.1",
+    "eslint": "^10.4.1",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-prettier": "^5.5.6",
+    "eslint-plugin-vue": "^10.9.1",
+    "globals": "^17.6.0",
+    "prettier": "^3.8.3",
+    "tailwindcss": "^4.3.0",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.60.0",
+    "vite": "^8.0.12",
+    "vue-eslint-parser": "^10.4.0",
+    "vue-tsc": "^3.2.8"
+  }
+}
