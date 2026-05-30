@@ -4,11 +4,13 @@ import vue from "eslint-plugin-vue";
 import vueParser from "vue-eslint-parser";
 import eslintConfigPrettier from "eslint-config-prettier";
 import prettierPlugin from "eslint-plugin-prettier";
+import sonarjs from "eslint-plugin-sonarjs";
 import globals from "globals";
 
 export default [
   { ignores: ["dist", "node_modules"] },
   eslint.configs.recommended,
+  sonarjs.configs.recommended,
   ...tseslint.configs.recommended,
   ...vue.configs["flat/recommended"],
   {
