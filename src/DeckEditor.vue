@@ -2,6 +2,7 @@
 import { ref, computed, watch } from "vue";
 import type { SlideLayout, SlideTheme } from "@mulmocast/deck";
 import { defaultTheme } from "./data/sampleDeck";
+import { makeSlide, clone, moveInArray } from "./editorHelpers";
 import DeckList from "./components/DeckList.vue";
 import SlidePreview from "./components/SlidePreview.vue";
 import Inspector from "./components/Inspector.vue";
@@ -20,7 +21,6 @@ const emit = defineEmits<{
   "update:selectedIndex": [index: number];
 }>();
 
-// Internal selection state, kept in sync with the optional prop.
 const internalIndex = ref(props.selectedIndex ?? 0);
 watch(
   () => props.selectedIndex,
@@ -45,8 +45,8 @@ const updateSlide = (next: SlideLayout) => {
   emitSlides(copy);
 };
 
-const addSlide = () => {
-  const next = props.slides.concat([{ layout: "title", title: "New slide" }]);
+const addSlide = (layout: SlideLayout["layout"]) => {
+  const next = props.slides.concat([makeSlide(layout)]);
   emitSlides(next);
   setIndex(next.length - 1);
 };
@@ -58,18 +58,41 @@ const removeSlide = (i: number) => {
   emitSlides(next);
   if (internalIndex.value >= next.length) setIndex(next.length - 1);
 };
+
+const duplicateSlide = (i: number) => {
+  const next = props.slides.slice();
+  next.splice(i + 1, 0, clone(props.slides[i]));
+  emitSlides(next);
+  setIndex(i + 1);
+};
+
+const moveSlide = (i: number, delta: number) => {
+  const next = moveInArray(props.slides, i, delta);
+  emitSlides(next);
+  // Follow the moved slide so the user stays focused on it.
+  const newIndex = Math.max(0, Math.min(next.length - 1, i + delta));
+  setIndex(newIndex);
+};
 </script>
 
 <template>
   <div class="flex h-full w-full overflow-hidden bg-stone-50 text-stone-900">
     <aside class="w-64 shrink-0 border-r border-stone-200 bg-white">
-      <DeckList :slides="slides" :selected-index="internalIndex" @select="setIndex" @add="addSlide" @remove="removeSlide" />
+      <DeckList
+        :slides="slides"
+        :selected-index="internalIndex"
+        @select="setIndex"
+        @add="addSlide"
+        @remove="removeSlide"
+        @duplicate="duplicateSlide"
+        @move="moveSlide"
+      />
     </aside>
     <main class="flex-1 min-w-0 bg-stone-100">
       <SlidePreview v-if="selectedSlide" :slide="selectedSlide" :theme="theme" />
       <div v-else class="flex h-full items-center justify-center text-stone-400">No slide selected</div>
     </main>
-    <aside class="w-80 shrink-0 border-l border-stone-200 bg-white overflow-y-auto">
+    <aside class="w-96 shrink-0 border-l border-stone-200 bg-white overflow-y-auto">
       <Inspector v-if="selectedSlide" :slide="selectedSlide" @update="updateSlide" />
     </aside>
   </div>
