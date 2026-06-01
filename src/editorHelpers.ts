@@ -128,3 +128,61 @@ export const moveInArray = <T>(arr: T[], from: number, delta: number): T[] => {
   next.splice(to, 0, el);
   return next;
 };
+
+/**
+ * Parse a deck path like `columns[0].content[1].items[0].text` into an array of
+ * string-or-number segments. Returns null if the path doesn't match the expected grammar.
+ */
+export const parsePath = (path: string): (string | number)[] | null => {
+  if (!path) return null;
+  const out: (string | number)[] = [];
+  // Match either ".name" / "name" (first) or "[123]".
+  const re = /([^.[\]]+)|\[(\d+)\]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(path)) !== null) {
+    if (m[2] !== undefined) out.push(Number(m[2]));
+    else out.push(m[1]);
+  }
+  return out.length ? out : null;
+};
+
+/**
+ * Deep-set `slide.<path>` to `value`, returning a structurally-cloned object so reactivity fires.
+ * Walks the path, copying each object/array level it touches; leaves untouched siblings shared.
+ */
+export const setByPath = <T>(root: T, path: string, value: unknown): T => {
+  const segments = parsePath(path);
+  if (!segments) return root;
+  const copy = JSON.parse(JSON.stringify(root)) as T;
+  let cursor: unknown = copy;
+  for (let i = 0; i < segments.length - 1; i++) {
+    const seg = segments[i];
+    if (cursor && typeof cursor === "object") {
+      const obj = cursor as Record<string | number, unknown>;
+      if (obj[seg] === undefined || obj[seg] === null) return root; // path doesn't exist, give up
+      cursor = obj[seg];
+    } else {
+      return root;
+    }
+  }
+  const last = segments[segments.length - 1];
+  if (cursor && typeof cursor === "object") {
+    (cursor as Record<string | number, unknown>)[last] = value;
+  }
+  return copy;
+};
+
+/** Deep-get `slide.<path>`. Returns undefined if anything along the way is missing. */
+export const getByPath = <T = unknown>(root: unknown, path: string): T | undefined => {
+  const segments = parsePath(path);
+  if (!segments) return undefined;
+  let cursor: unknown = root;
+  for (const seg of segments) {
+    if (cursor && typeof cursor === "object") {
+      cursor = (cursor as Record<string | number, unknown>)[seg];
+    } else {
+      return undefined;
+    }
+  }
+  return cursor as T | undefined;
+};
