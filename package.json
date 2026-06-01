@@ -40,8 +40,9 @@
     "build": "vue-tsc -b && vite build",
     "build:lib": "BUILD_TARGET=lib vue-tsc -b && BUILD_TARGET=lib vite build",
     "preview": "vite preview",
-    "lint": "eslint src",
-    "format": "prettier --write 'src/**/*.{ts,vue,css}'",
+    "lint": "eslint src test",
+    "test": "tsx --test ./test/**/test_*.ts",
+    "format": "prettier --write '{src,test}/**/*.{ts,vue,css}'",
     "prepublishOnly": "yarn run build:lib"
   },
   "engines": {
@@ -66,6 +67,7 @@
     "globals": "^17.6.0",
     "prettier": "^3.8.3",
     "tailwindcss": "^4.3.0",
+    "tsx": "^4.22.4",
     "typescript": "~6.0.2",
     "typescript-eslint": "^8.60.0",
     "vite": "^8.0.12",

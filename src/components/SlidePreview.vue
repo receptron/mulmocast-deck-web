@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch, onBeforeUnmount } from "vue";
+import { computed, ref, onBeforeUnmount } from "vue";
 import { generateSlideHTML, type SlideLayout, type SlideTheme } from "@mulmocast/deck";
-import { setByPath } from "../editorHelpers";
+import { setByPath, htmlToMarkup, ACCENT_COLORS } from "../editorHelpers";
+import InlineToolbar from "./InlineToolbar.vue";
 
 const props = defineProps<{
   slide: SlideLayout;
@@ -20,14 +21,57 @@ const html = computed(() => {
 
 const iframeRef = ref<HTMLIFrameElement | null>(null);
 
-// Reverse-walk the rendered HTML for the data-mulmo-path the user clicked, then write the new
-// text back to the slide JSON. Edits happen on blur / Enter — re-rendering on each keystroke
-// would reset the cursor.
+// Floating toolbar state. Coordinates are in parent-page (viewport) space.
+const toolbar = ref<{ x: number; y: number; visible: boolean }>({ x: 0, y: 0, visible: false });
+const lastEditableEl = ref<HTMLElement | null>(null);
+
+const hideToolbar = () => {
+  toolbar.value = { x: 0, y: 0, visible: false };
+};
+
+/**
+ * Read the current selection inside the iframe, translate its bounding rect to parent-viewport
+ * coordinates, and position the toolbar above it. Hides if the selection is empty / collapsed.
+ */
+const reposition = (iframe: HTMLIFrameElement) => {
+  const doc = iframe.contentDocument;
+  if (!doc) return;
+  const sel = doc.getSelection();
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+    hideToolbar();
+    return;
+  }
+  // The selection must be inside a [data-mulmo-path] element for our wrap helpers to make sense.
+  const anchor = sel.anchorNode;
+  const editable = anchor instanceof Element ? anchor.closest("[data-mulmo-path]") : (anchor?.parentElement?.closest("[data-mulmo-path]") ?? null);
+  if (!editable || editable.getAttribute("contenteditable") !== "true") {
+    hideToolbar();
+    return;
+  }
+  const rect = sel.getRangeAt(0).getBoundingClientRect();
+  const iframeRect = iframe.getBoundingClientRect();
+  const TOOLBAR_HEIGHT = 36;
+  const x = iframeRect.left + rect.left;
+  const y = Math.max(0, iframeRect.top + rect.top - TOOLBAR_HEIGHT - 4);
+  toolbar.value = { x, y, visible: true };
+};
+
+const commit = (el: HTMLElement) => {
+  const path = el.getAttribute("data-mulmo-path");
+  if (!path) return;
+  // Round-trip the rendered HTML back to deck inline markup so toolbar-applied <strong>/<em>/<span>
+  // round-trips through renderInlineMarkup cleanly.
+  const text = htmlToMarkup(el.innerHTML).replace(/\r/g, "");
+  el.removeAttribute("contenteditable");
+  hideToolbar();
+  const next = setByPath(props.slide, path, text);
+  emit("update", next as SlideLayout);
+};
+
 const wireEditing = (iframe: HTMLIFrameElement) => {
   const doc = iframe.contentDocument;
   if (!doc || !doc.body) return;
 
-  // Hover outline + edit cursor on any editable target.
   if (!doc.getElementById("__mulmo_edit_style")) {
     const style = doc.createElement("style");
     style.id = "__mulmo_edit_style";
@@ -38,30 +82,20 @@ const wireEditing = (iframe: HTMLIFrameElement) => {
     doc.head?.appendChild(style);
   }
 
-  const commit = (el: HTMLElement) => {
-    const path = el.getAttribute("data-mulmo-path");
-    if (!path) return;
-    const text = el.innerText.replace(/\r/g, "");
-    el.removeAttribute("contenteditable");
-    const next = setByPath(props.slide, path, text);
-    emit("update", next as SlideLayout);
-  };
-
   doc.body.addEventListener("click", (e) => {
     const target = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-mulmo-path]");
-    if (!target) return;
-    e.preventDefault();
+    if (!target) {
+      hideToolbar();
+      return;
+    }
     if (target.getAttribute("contenteditable") === "true") return;
     target.setAttribute("contenteditable", "true");
-    target.focus();
-    // Select all so typing replaces.
-    const sel = doc.getSelection();
-    if (sel) {
-      sel.removeAllRanges();
-      const range = doc.createRange();
-      range.selectNodeContents(target);
-      sel.addRange(range);
-    }
+    lastEditableEl.value = target;
+    // Don't auto-select-all on enter — leaving the click's natural caret position avoids the
+    // "user types a key and nukes all formatting" contenteditable footgun. The element is
+    // focused implicitly by the click; we only ensure focus if it didn't take.
+    if (doc.activeElement !== target) target.focus();
+    reposition(iframe);
   });
 
   doc.body.addEventListener(
@@ -70,7 +104,7 @@ const wireEditing = (iframe: HTMLIFrameElement) => {
       const target = e.target as HTMLElement | null;
       if (target?.getAttribute("contenteditable") === "true") commit(target);
     },
-    true, // capture — blur doesn't bubble
+    true,
   );
 
   doc.body.addEventListener("keydown", (e) => {
@@ -81,11 +115,15 @@ const wireEditing = (iframe: HTMLIFrameElement) => {
       target.blur();
     } else if (e.key === "Escape") {
       e.preventDefault();
-      // Revert: just remove editable; next render (from props) brings back the original.
       target.removeAttribute("contenteditable");
+      hideToolbar();
       target.blur();
     }
   });
+
+  // Selection inside the iframe → reposition the toolbar.
+  doc.addEventListener("selectionchange", () => reposition(iframe));
+  doc.addEventListener("scroll", () => reposition(iframe), true);
 };
 
 const onIframeLoad = () => {
@@ -94,22 +132,194 @@ const onIframeLoad = () => {
   wireEditing(iframe);
 };
 
-// When the slide content changes (from anywhere — Inspector, layout swap, etc.) we re-emit srcdoc,
-// which triggers iframe `load` again. The wireEditing handler reattaches per load.
-watch(html, () => {
-  // The iframe srcdoc re-sets on render; wireEditing reattaches on load.
-});
+// ─── toolbar actions ───
+const currentRange = (): { doc: Document; sel: Selection; range: Range } | null => {
+  const iframe = iframeRef.value;
+  const doc = iframe?.contentDocument;
+  const sel = doc?.getSelection();
+  if (!doc || !sel || sel.isCollapsed || sel.rangeCount === 0) return null;
+  return { doc, sel, range: sel.getRangeAt(0) };
+};
 
-onBeforeUnmount(() => {
-  // Listeners live in the iframe doc which is torn down with the iframe — nothing to clean up here.
-});
+const findEditableRoot = (node: Node | null): HTMLElement | null => {
+  let cur: Node | null = node;
+  while (cur && cur.nodeType === 3) cur = cur.parentNode;
+  return (cur as Element | null)?.closest<HTMLElement>("[data-mulmo-path]") ?? null;
+};
+
+/**
+ * Tidy the editable element after a wrap/unwrap pass:
+ *   - drop empty inline elements (`<strong></strong>` etc.)
+ *   - collapse nested same-type wrappers (`<strong><strong>x</strong></strong>` → `<strong>x</strong>`)
+ *   - merge adjacent same-tag siblings (`<strong>a</strong><strong>b</strong>` → `<strong>ab</strong>`)
+ *   - normalize() to merge adjacent text nodes
+ */
+const cleanupEditable = (root: HTMLElement) => {
+  const isInline = (el: Element): boolean => {
+    const t = el.tagName.toLowerCase();
+    if (t === "strong" || t === "em" || t === "b" || t === "i") return true;
+    if (t === "span") return /text-d-[a-z]+/.test(el.getAttribute("class") ?? "");
+    return false;
+  };
+  // Returns true when two inline elements have the same "kind" — same tag + same class signature.
+  const sameKind = (a: Element, b: Element): boolean => {
+    if (a.tagName !== b.tagName) return false;
+    return (a.getAttribute("class") ?? "") === (b.getAttribute("class") ?? "");
+  };
+  const unwrap = (el: Element) => {
+    const parent = el.parentNode;
+    if (!parent) return;
+    while (el.firstChild) parent.insertBefore(el.firstChild, el);
+    parent.removeChild(el);
+  };
+
+  // Drop empty inline elements. Walk a static snapshot so we can remove during iteration.
+  Array.from(root.querySelectorAll("strong, em, b, i, span")).forEach((el) => {
+    if (!isInline(el)) return;
+    if (el.textContent === "") el.remove();
+  });
+
+  // Collapse nested same-kind wrappers (parent first).
+  for (;;) {
+    const nested = Array.from(root.querySelectorAll("strong, em, b, i, span")).find(
+      (el) => isInline(el) && el.parentElement && isInline(el.parentElement) && sameKind(el, el.parentElement),
+    );
+    if (!nested) break;
+    unwrap(nested);
+  }
+
+  // Merge adjacent same-tag siblings.
+  for (;;) {
+    let merged = false;
+    Array.from(root.querySelectorAll("strong, em, b, i, span")).forEach((el) => {
+      if (!isInline(el)) return;
+      const next = el.nextSibling;
+      if (next && next.nodeType === 1 && sameKind(el, next as Element)) {
+        while ((next as Element).firstChild) el.appendChild((next as Element).firstChild!);
+        (next as Element).remove();
+        merged = true;
+      }
+    });
+    if (!merged) break;
+  }
+
+  root.normalize();
+};
+
+/**
+ * Returns the nearest ancestor of the given node that matches the wrapper kind
+ * (same tagName + same class), within the editable root. Used to detect existing
+ * wrap → toggle off.
+ */
+const ancestorWrapper = (node: Node | null, tagName: string, className: string | undefined, root: HTMLElement): HTMLElement | null => {
+  let cur: Node | null = node;
+  while (cur && cur !== root) {
+    if (cur.nodeType === 1) {
+      const el = cur as HTMLElement;
+      if (el.tagName.toLowerCase() === tagName.toLowerCase() && (el.getAttribute("class") ?? "") === (className ?? "")) {
+        return el;
+      }
+    }
+    cur = cur.parentNode;
+  }
+  return null;
+};
+
+const reselectText = (doc: Document, sel: Selection, root: HTMLElement, text: string) => {
+  if (!text) return;
+  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let n: Node | null;
+  while ((n = walker.nextNode())) {
+    const idx = (n.nodeValue ?? "").indexOf(text);
+    if (idx >= 0) {
+      const r = doc.createRange();
+      r.setStart(n, idx);
+      r.setEnd(n, idx + text.length);
+      sel.removeAllRanges();
+      sel.addRange(r);
+      return;
+    }
+  }
+};
+
+const unwrapElement = (target: HTMLElement) => {
+  const parent = target.parentNode;
+  if (!parent) return;
+  while (target.firstChild) parent.insertBefore(target.firstChild, target);
+  parent.removeChild(target);
+};
+
+const applyWrap = (doc: Document, range: Range, tagName: string, className: string | undefined): HTMLElement => {
+  try {
+    const wrapper = doc.createElement(tagName);
+    if (className) wrapper.setAttribute("class", className);
+    range.surroundContents(wrapper);
+    return wrapper;
+  } catch {
+    // Range crosses element boundaries — extract + insert.
+    const frag = range.extractContents();
+    const wrapper = doc.createElement(tagName);
+    if (className) wrapper.setAttribute("class", className);
+    wrapper.appendChild(frag);
+    range.insertNode(wrapper);
+    return wrapper;
+  }
+};
+
+const selectInside = (doc: Document, sel: Selection, wrapper: HTMLElement) => {
+  sel.removeAllRanges();
+  const r = doc.createRange();
+  r.selectNodeContents(wrapper);
+  sel.addRange(r);
+};
+
+const wrap = (tagName: string, className?: string) => {
+  const ctx = currentRange();
+  if (!ctx || !ctx.range.toString().trim()) return;
+  const root = findEditableRoot(ctx.range.commonAncestorContainer);
+  if (!root) return;
+
+  // Toggle: selection fully inside an existing same-kind wrapper → unwrap and re-select.
+  const start = ancestorWrapper(ctx.range.startContainer, tagName, className, root);
+  const end = ancestorWrapper(ctx.range.endContainer, tagName, className, root);
+  if (start && start === end) {
+    const inner = start.textContent ?? "";
+    unwrapElement(start);
+    cleanupEditable(root);
+    reselectText(ctx.doc, ctx.sel, root, inner);
+    reposition(iframeRef.value as HTMLIFrameElement);
+    return;
+  }
+
+  const wrapper = applyWrap(ctx.doc, ctx.range, tagName, className);
+  cleanupEditable(root);
+  selectInside(ctx.doc, ctx.sel, wrapper);
+  reposition(iframeRef.value as HTMLIFrameElement);
+};
+
+const onBold = () => wrap("strong");
+const onEmphasis = () => wrap("em", "text-d-warning not-italic font-bold");
+const onColor = (color: (typeof ACCENT_COLORS)[number]) => wrap("span", `text-d-${color}`);
+const onClearFormat = () => {
+  const ctx = currentRange();
+  if (!ctx) return;
+  const text = ctx.range.toString();
+  if (!text) return;
+  ctx.range.deleteContents();
+  ctx.range.insertNode(ctx.doc.createTextNode(text));
+  const root = findEditableRoot(ctx.range.commonAncestorContainer);
+  if (root) cleanupEditable(root);
+  reposition(iframeRef.value as HTMLIFrameElement);
+};
+
+onBeforeUnmount(() => hideToolbar());
 </script>
 
 <template>
   <div class="flex h-full flex-col p-6">
     <div class="mb-3 flex items-center justify-between">
       <h2 class="text-sm font-semibold tracking-wide text-stone-700">
-        Live preview <span class="text-[10px] font-normal text-stone-400">— click text to edit</span>
+        Live preview <span class="text-[10px] font-normal text-stone-400">— click text to edit, select for toolbar</span>
       </h2>
       <span class="text-xs text-stone-400">{{ slide.layout }}</span>
     </div>
@@ -123,5 +333,6 @@ onBeforeUnmount(() => {
         @load="onIframeLoad"
       />
     </div>
+    <InlineToolbar :x="toolbar.x" :y="toolbar.y" :visible="toolbar.visible" @bold="onBold" @emphasis="onEmphasis" @color="onColor" @clear="onClearFormat" />
   </div>
 </template>

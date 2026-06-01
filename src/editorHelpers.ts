@@ -186,3 +186,93 @@ export const getByPath = <T = unknown>(root: unknown, path: string): T | undefin
   }
   return cursor as T | undefined;
 };
+
+/** Color tokens that survive the inline-markup round-trip. */
+const INLINE_COLOR_KEYS = new Set(["primary", "accent", "success", "warning", "danger", "info", "highlight"]);
+
+/**
+ * Replacement for an `<em>` / `<i>` tag. Deck's em regex requires word boundaries on both sides
+ * (`(?<![*\w])\*` … `\*(?!\w)`) and non-space at the inner edges (`\*(?!\s)` … `(?<!\s)\*`).
+ * When any of those conditions wouldn't be satisfied, falling back to `{warning:…}` keeps the
+ * markup round-trippable — deck's color regex `\{([a-z]+):(.+?)\}` has no boundary constraint.
+ *
+ * Visual difference: `*x*` renders as amber bold, `{warning:x}` renders as amber-colored only
+ * (no bold). Acceptable as a fallback since the alternative is a parse failure where the user
+ * sees literal asterisks.
+ */
+const emReplace = (match: string, _tag: string, inner: string, offset: number, full: string): string => {
+  const prevChar = full[offset - 1] ?? "";
+  const nextChar = full[offset + match.length] ?? "";
+  const isWord = (c: string) => /\w/.test(c);
+  const startsWithSpace = /^\s/.test(inner);
+  const endsWithSpace = /\s$/.test(inner);
+  if (isWord(prevChar) || isWord(nextChar) || startsWithSpace || endsWithSpace) {
+    return `{warning:${inner}}`;
+  }
+  return `*${inner}*`;
+};
+
+/**
+ * Convert an editable element's innerHTML back into deck inline-markup syntax. Pure / DOM-free
+ * so it can be unit-tested under `node:test`. Honors:
+ *   <strong> / <b>           → **bold**
+ *   <em> / <i>               → *emphasis*
+ *   <span class="text-d-X">  → {X:text}   (X ∈ INLINE_COLOR_KEYS)
+ *   <br>                      → newline
+ * Other tags are stripped to their text content.
+ *
+ * Implementation note: a recursive innermost-first regex replacement is fine here because the
+ * input only comes from contenteditable + our own programmatic wrappers — well-formed and
+ * shallow nesting (a handful of layers, never user-authored markup). It avoids needing jsdom.
+ */
+export const htmlToMarkup = (html: string): string => {
+  let s = html;
+  // <br> → newline (does not contain children, do first).
+  s = s.replace(/<br\s*\/?>/gi, "\n");
+
+  // Inline tags: replace innermost first. Iterate until no rule matches.
+  for (let i = 0; i < 50; i++) {
+    const before = s;
+    s = s.replace(/<(strong|b)\b[^>]*>([^<]*?)<\/\1>/gi, "**$2**");
+    s = s.replace(/<(em|i)\b[^>]*>([^<]*?)<\/\1>/gi, emReplace);
+    s = s.replace(/<span\b[^>]*class="([^"]*)"[^>]*>([^<]*?)<\/span>/gi, (_m, cls: string, text: string) => {
+      const colorMatch = /\btext-d-([a-z]+)\b/.exec(cls);
+      if (colorMatch && INLINE_COLOR_KEYS.has(colorMatch[1])) return `{${colorMatch[1]}:${text}}`;
+      return text;
+    });
+    // bare span without class
+    s = s.replace(/<span\b[^>]*>([^<]*?)<\/span>/gi, "$1");
+    if (s === before) break;
+  }
+
+  // Strip any other tags as a safety net. Loop until no further tags survive — this protects
+  // against pathological inputs like `<s<script>cript>` where a single pass would leave
+  // `<script>` behind. In practice innerHTML from contenteditable is well-formed and one pass
+  // is enough, but the loop is cheap and shuts CodeQL's incomplete-sanitization rule up.
+  let prev = "";
+  while (prev !== s) {
+    prev = s;
+    // The character class is a single-quantifier match — no ambiguity → linear time.
+    // eslint-disable-next-line sonarjs/slow-regex
+    s = s.replace(/<[^>]+>/g, "");
+  }
+  // Decode the basic entities our escapeHtml emits, in a SINGLE pass so an input like
+  // `&amp;lt;` lands as `&lt;` (literal), not as `<` (double-unescape).
+  s = s.replace(/&(amp|lt|gt|quot|#39);/g, (_match, name: string) => {
+    switch (name) {
+      case "amp":
+        return "&";
+      case "lt":
+        return "<";
+      case "gt":
+        return ">";
+      case "quot":
+        return '"';
+      case "#39":
+        return "'";
+      default:
+        return _match;
+    }
+  });
+  return s;
+};
