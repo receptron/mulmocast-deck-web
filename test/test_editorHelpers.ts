@@ -144,6 +144,31 @@ test("htmlToMarkup: idempotent on simple plain-text inputs", () => {
   assert.equal(htmlToMarkup(x), x);
 });
 
+// Reproduction of a user-reported case: span color + strong adjacent + literal asterisks
+// in the surrounding text. The literal `*rowse*` is NOT em (deck's em requires non-\w
+// lookbehind, fails after "b"), so it must round-trip verbatim.
+test("htmlToMarkup: user case — span color + strong + literal asterisks", () => {
+  const input = 'Live-preview a Sli<span class="text-d-primary">deLa</span>yout D<strong>SL in t</strong>he b*rowse*r';
+  const expected = "Live-preview a Sli{primary:deLa}yout D**SL in t**he b*rowse*r";
+  assert.equal(htmlToMarkup(input), expected);
+});
+
+// Variants of the same case that may break the regex due to attribute ordering / extra classes
+test("htmlToMarkup: span color with additional classes still maps", () => {
+  const input = '<span class="text-d-primary other">x</span>';
+  assert.equal(htmlToMarkup(input), "{primary:x}");
+});
+
+test("htmlToMarkup: span color with attribute before class", () => {
+  const input = '<span data-x="y" class="text-d-primary">x</span>';
+  assert.equal(htmlToMarkup(input), "{primary:x}");
+});
+
+test("htmlToMarkup: literal asterisks adjacent to inner tags are preserved", () => {
+  const input = "a *b* <strong>c</strong>";
+  assert.equal(htmlToMarkup(input), "a *b* **c**");
+});
+
 // ─── moveInArray ───
 
 test("moveInArray: shift right", () => {
