@@ -1,6 +1,6 @@
 {
   "name": "@mulmocast/deck-web",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Vue 3 components for editing @mulmocast/deck SlideLayout decks live in the browser",
   "type": "module",
   "license": "MIT",
