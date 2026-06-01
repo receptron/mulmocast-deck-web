@@ -8,7 +8,14 @@
 
 Vue 3 components for editing [`@mulmocast/deck`](https://www.npmjs.com/package/@mulmocast/deck) slide decks live in the browser.
 
-A 3-pane editor that holds a `SlideLayout[]` (or a full MulmoScript) in memory, renders each slide live via `generateSlideHTML()` into a sandboxed iframe, and lets you edit fields through a schema-aware inspector. No backend, no persistence, no AI — just data ↔ preview.
+A 3-pane editor that holds a `SlideLayout[]` (or a full MulmoScript) in memory, renders each slide live via `generateSlideHTML()` into a sandboxed iframe, and lets you edit through **WYSIWYG click-to-edit + a floating toolbar + drag-and-drop reorder**, plus a schema-aware Inspector for structural edits. No backend, no persistence, no AI — just data ↔ preview.
+
+## Highlights
+
+- **WYSIWYG click-to-edit** — click any text in the preview to edit in place. Blur or Enter commits, Escape cancels.
+- **Floating toolbar** — select text → toolbar appears with **B** (bold) / **★ amber highlight** / **7 color swatches** / **× clear**. Toggle off by clicking the same button again.
+- **Drag-and-drop reorder** — drag bullets, stats cards, timeline steps, manifesto lines, columns, grid items in the preview to reorder. Drag slides in the left list to reorder the deck.
+- **Inspector for structure** — add / remove / swap layout type / nest content blocks / edit non-text fields.
 
 ## Install
 
@@ -16,7 +23,7 @@ A 3-pane editor that holds a `SlideLayout[]` (or a full MulmoScript) in memory, 
 yarn add @mulmocast/deck-web @mulmocast/deck vue
 ```
 
-`vue ^3.5` and `@mulmocast/deck ^0.1.2` are peer dependencies — install whichever versions your app already pins.
+`vue ^3.5` and `@mulmocast/deck ^0.7.0` are peer dependencies (0.7.0 ships the `data-mulmo-path` / `data-mulmo-item-path` attributes the WYSIWYG / D&D rely on).
 
 ## Usage
 
@@ -54,6 +61,25 @@ const script = ref({ /* your MulmoScript */ });
 
 Theme priority: prop `theme` > `script.presentationStyle.slideParams.theme` > `script.slideParams.theme` > built-in `defaultTheme`.
 
+### Use `<SlidePreview>` standalone
+
+If you already have your own deck-list / inspector and only want WYSIWYG editing in an iframe:
+
+```vue
+<script setup lang="ts">
+import { ref } from "vue";
+import { SlidePreview, defaultTheme, type SlideLayout } from "@mulmocast/deck-web";
+
+const slide = ref<SlideLayout>({ layout: "title", title: "Hello", subtitle: "Click any text to edit" });
+</script>
+
+<template>
+  <SlidePreview :slide="slide" :theme="defaultTheme" @update="(s) => (slide = s)" />
+</template>
+```
+
+`<SlidePreview>` is self-contained: click-to-edit, the floating toolbar, and D&D reorder of in-slide items all work out of the box.
+
 ## Components
 
 | Component | Purpose |
@@ -63,11 +89,22 @@ Theme priority: prop `theme` > `script.presentationStyle.slideParams.theme` > `s
 | `<DeckList>` / `<SlidePreview>` / `<Inspector>` | The individual panes — drop into your own layout. |
 | `defaultTheme` / `sampleDeck` | Data helpers for quick starts. |
 
-The Inspector currently covers `title` / `stats` (per-item value/label/color) / `comparison` / `bigQuote`. Other layouts render fine in preview but aren't form-editable yet.
+The Inspector covers every layout (`title` / `bigQuote` / `columns` / `comparison` / `grid` / `stats` / `timeline` / `split` / `matrix` / `table` / `funnel` / `waterfall` / `manifesto`) and every content block type (`text` / `bullets` / `callout` / `tag` / `code` / `metric` / `divider` / `image` / `imageRef` / `chart` / `mermaid` / `section` / `table`), with full CRUD + reorder on every array.
 
 ## How preview works
 
 Each slide is rendered through `generateSlideHTML(theme, slide)` from `@mulmocast/deck` and dropped into an `<iframe srcdoc>` sandbox. Tailwind is loaded inside the iframe via CDN, so the host page's CSS can't bleed in (or out).
+
+### How WYSIWYG / D&D wires through the iframe
+
+`@mulmocast/deck@0.6+` emits two data attributes that consumers can rely on:
+
+| Attribute | On | Used for |
+|--|--|--|
+| `data-mulmo-path` | Every editable leaf text element | click-to-edit (set `contenteditable=true`, commit on blur via `setByPath`). Tip of the WYSIWYG path. |
+| `data-mulmo-item-path` | List-item container (`<li>`, stat card, timeline step, manifesto line, columns / grid card) | HTML5 drag handle (`draggable=true`). Drop on a sibling → `moveByPath`. |
+
+The pure helpers (`parsePath`, `getByPath`, `setByPath`, `moveByPath`, `htmlToMarkup`) are exposed from `editorHelpers.ts` and unit-tested under `node:test`.
 
 ## Architecture
 
