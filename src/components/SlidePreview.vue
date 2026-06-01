@@ -146,27 +146,159 @@ const currentRange = (): { doc: Document; sel: Selection; range: Range } | null 
   return { doc, sel, range: sel.getRangeAt(0) };
 };
 
-const wrap = (tagName: string, className?: string) => {
-  const ctx = currentRange();
-  if (!ctx) return;
+const findEditableRoot = (node: Node | null): HTMLElement | null => {
+  let cur: Node | null = node;
+  while (cur && cur.nodeType === 3) cur = cur.parentNode;
+  return (cur as Element | null)?.closest<HTMLElement>("[data-mulmo-path]") ?? null;
+};
+
+/**
+ * Tidy the editable element after a wrap/unwrap pass:
+ *   - drop empty inline elements (`<strong></strong>` etc.)
+ *   - collapse nested same-type wrappers (`<strong><strong>x</strong></strong>` → `<strong>x</strong>`)
+ *   - merge adjacent same-tag siblings (`<strong>a</strong><strong>b</strong>` → `<strong>ab</strong>`)
+ *   - normalize() to merge adjacent text nodes
+ */
+const cleanupEditable = (root: HTMLElement) => {
+  const isInline = (el: Element): boolean => {
+    const t = el.tagName.toLowerCase();
+    if (t === "strong" || t === "em" || t === "b" || t === "i") return true;
+    if (t === "span") return /text-d-[a-z]+/.test(el.getAttribute("class") ?? "");
+    return false;
+  };
+  // Returns true when two inline elements have the same "kind" — same tag + same class signature.
+  const sameKind = (a: Element, b: Element): boolean => {
+    if (a.tagName !== b.tagName) return false;
+    return (a.getAttribute("class") ?? "") === (b.getAttribute("class") ?? "");
+  };
+  const unwrap = (el: Element) => {
+    const parent = el.parentNode;
+    if (!parent) return;
+    while (el.firstChild) parent.insertBefore(el.firstChild, el);
+    parent.removeChild(el);
+  };
+
+  // Drop empty inline elements. Walk a static snapshot so we can remove during iteration.
+  Array.from(root.querySelectorAll("strong, em, b, i, span")).forEach((el) => {
+    if (!isInline(el)) return;
+    if (el.textContent === "") el.remove();
+  });
+
+  // Collapse nested same-kind wrappers (parent first).
+  for (;;) {
+    const nested = Array.from(root.querySelectorAll("strong, em, b, i, span")).find(
+      (el) => isInline(el) && el.parentElement && isInline(el.parentElement) && sameKind(el, el.parentElement),
+    );
+    if (!nested) break;
+    unwrap(nested);
+  }
+
+  // Merge adjacent same-tag siblings.
+  for (;;) {
+    let merged = false;
+    Array.from(root.querySelectorAll("strong, em, b, i, span")).forEach((el) => {
+      if (!isInline(el)) return;
+      const next = el.nextSibling;
+      if (next && next.nodeType === 1 && sameKind(el, next as Element)) {
+        while ((next as Element).firstChild) el.appendChild((next as Element).firstChild!);
+        (next as Element).remove();
+        merged = true;
+      }
+    });
+    if (!merged) break;
+  }
+
+  root.normalize();
+};
+
+/**
+ * Returns the nearest ancestor of the given node that matches the wrapper kind
+ * (same tagName + same class), within the editable root. Used to detect existing
+ * wrap → toggle off.
+ */
+const ancestorWrapper = (node: Node | null, tagName: string, className: string | undefined, root: HTMLElement): HTMLElement | null => {
+  let cur: Node | null = node;
+  while (cur && cur !== root) {
+    if (cur.nodeType === 1) {
+      const el = cur as HTMLElement;
+      if (el.tagName.toLowerCase() === tagName.toLowerCase() && (el.getAttribute("class") ?? "") === (className ?? "")) {
+        return el;
+      }
+    }
+    cur = cur.parentNode;
+  }
+  return null;
+};
+
+const reselectText = (doc: Document, sel: Selection, root: HTMLElement, text: string) => {
+  if (!text) return;
+  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let n: Node | null;
+  while ((n = walker.nextNode())) {
+    const idx = (n.nodeValue ?? "").indexOf(text);
+    if (idx >= 0) {
+      const r = doc.createRange();
+      r.setStart(n, idx);
+      r.setEnd(n, idx + text.length);
+      sel.removeAllRanges();
+      sel.addRange(r);
+      return;
+    }
+  }
+};
+
+const unwrapElement = (target: HTMLElement) => {
+  const parent = target.parentNode;
+  if (!parent) return;
+  while (target.firstChild) parent.insertBefore(target.firstChild, target);
+  parent.removeChild(target);
+};
+
+const applyWrap = (doc: Document, range: Range, tagName: string, className: string | undefined): HTMLElement => {
   try {
-    const wrapper = ctx.doc.createElement(tagName);
+    const wrapper = doc.createElement(tagName);
     if (className) wrapper.setAttribute("class", className);
-    ctx.range.surroundContents(wrapper);
-    // Move selection inside the wrapper so subsequent buttons compose.
-    ctx.sel.removeAllRanges();
-    const r = ctx.doc.createRange();
-    r.selectNodeContents(wrapper);
-    ctx.sel.addRange(r);
+    range.surroundContents(wrapper);
+    return wrapper;
   } catch {
-    // surroundContents throws when the range crosses element boundaries (e.g. partially-selected
-    // <strong>). Fall back to extract + wrap.
-    const frag = ctx.range.extractContents();
-    const wrapper = ctx.doc.createElement(tagName);
+    // Range crosses element boundaries — extract + insert.
+    const frag = range.extractContents();
+    const wrapper = doc.createElement(tagName);
     if (className) wrapper.setAttribute("class", className);
     wrapper.appendChild(frag);
-    ctx.range.insertNode(wrapper);
+    range.insertNode(wrapper);
+    return wrapper;
   }
+};
+
+const selectInside = (doc: Document, sel: Selection, wrapper: HTMLElement) => {
+  sel.removeAllRanges();
+  const r = doc.createRange();
+  r.selectNodeContents(wrapper);
+  sel.addRange(r);
+};
+
+const wrap = (tagName: string, className?: string) => {
+  const ctx = currentRange();
+  if (!ctx || !ctx.range.toString().trim()) return;
+  const root = findEditableRoot(ctx.range.commonAncestorContainer);
+  if (!root) return;
+
+  // Toggle: selection fully inside an existing same-kind wrapper → unwrap and re-select.
+  const start = ancestorWrapper(ctx.range.startContainer, tagName, className, root);
+  const end = ancestorWrapper(ctx.range.endContainer, tagName, className, root);
+  if (start && start === end) {
+    const inner = start.textContent ?? "";
+    unwrapElement(start);
+    cleanupEditable(root);
+    reselectText(ctx.doc, ctx.sel, root, inner);
+    reposition(iframeRef.value as HTMLIFrameElement);
+    return;
+  }
+
+  const wrapper = applyWrap(ctx.doc, ctx.range, tagName, className);
+  cleanupEditable(root);
+  selectInside(ctx.doc, ctx.sel, wrapper);
   reposition(iframeRef.value as HTMLIFrameElement);
 };
 
@@ -177,8 +309,11 @@ const onClearFormat = () => {
   const ctx = currentRange();
   if (!ctx) return;
   const text = ctx.range.toString();
+  if (!text) return;
   ctx.range.deleteContents();
   ctx.range.insertNode(ctx.doc.createTextNode(text));
+  const root = findEditableRoot(ctx.range.commonAncestorContainer);
+  if (root) cleanupEditable(root);
   reposition(iframeRef.value as HTMLIFrameElement);
 };
 

@@ -187,42 +187,52 @@ export const getByPath = <T = unknown>(root: unknown, path: string): T | undefin
   return cursor as T | undefined;
 };
 
-/**
- * Convert an editable text element's innerHTML back into the deck's inline-markup syntax,
- * round-tripping the renderInlineMarkup pass. We honor:
- *   <strong> / <b>          → **bold**
- *   <em> (any class)        → *emphasis*
- *   <span class="text-d-X"> → {X:text}   (X ∈ inlineColorKeys)
- *   <br>                    → newline
- * Anything else is stripped to its text content. Safe for round-tripping the formatter — typing
- * `**foo**` raw, blurring, and re-clicking should produce the same source.
- */
+/** Color tokens that survive the inline-markup round-trip. */
 const INLINE_COLOR_KEYS = new Set(["primary", "accent", "success", "warning", "danger", "info", "highlight"]);
 
+/**
+ * Convert an editable element's innerHTML back into deck inline-markup syntax. Pure / DOM-free
+ * so it can be unit-tested under `node:test`. Honors:
+ *   <strong> / <b>           → **bold**
+ *   <em> / <i>               → *emphasis*
+ *   <span class="text-d-X">  → {X:text}   (X ∈ INLINE_COLOR_KEYS)
+ *   <br>                      → newline
+ * Other tags are stripped to their text content.
+ *
+ * Implementation note: a recursive innermost-first regex replacement is fine here because the
+ * input only comes from contenteditable + our own programmatic wrappers — well-formed and
+ * shallow nesting (a handful of layers, never user-authored markup). It avoids needing jsdom.
+ */
 export const htmlToMarkup = (html: string): string => {
-  // Use a detached <template> in any window we can grab. Prefer the global document.
-  const doc = typeof document !== "undefined" ? document : null;
-  if (!doc) return html;
-  const template = doc.createElement("template");
-  template.innerHTML = html;
+  let s = html;
+  // <br> → newline (does not contain children, do first).
+  s = s.replace(/<br\s*\/?>/gi, "\n");
 
-  const walk = (node: Node): string => {
-    if (node.nodeType === 3) return node.nodeValue ?? "";
-    if (node.nodeType !== 1) return "";
-    const el = node as Element;
-    const tag = el.tagName.toLowerCase();
-    if (tag === "br") return "\n";
-    const inner = Array.from(el.childNodes).map(walk).join("");
-    if (tag === "strong" || tag === "b") return `**${inner}**`;
-    if (tag === "em" || tag === "i") return `*${inner}*`;
-    if (tag === "span") {
-      // Match the `text-d-<color>` class injected by renderInlineMarkup.
-      const cls = el.getAttribute("class") ?? "";
-      const m = /text-d-([a-z]+)/.exec(cls);
-      if (m && INLINE_COLOR_KEYS.has(m[1])) return `{${m[1]}:${inner}}`;
-    }
-    return inner;
-  };
+  // Inline tags: replace innermost first. Iterate until no rule matches.
+  for (let i = 0; i < 50; i++) {
+    const before = s;
+    s = s.replace(/<(strong|b)\b[^>]*>([^<]*?)<\/\1>/gi, "**$2**");
+    s = s.replace(/<(em|i)\b[^>]*>([^<]*?)<\/\1>/gi, "*$2*");
+    s = s.replace(/<span\b[^>]*class="([^"]*)"[^>]*>([^<]*?)<\/span>/gi, (_m, cls: string, text: string) => {
+      const colorMatch = /\btext-d-([a-z]+)\b/.exec(cls);
+      if (colorMatch && INLINE_COLOR_KEYS.has(colorMatch[1])) return `{${colorMatch[1]}:${text}}`;
+      return text;
+    });
+    // bare span without class
+    s = s.replace(/<span\b[^>]*>([^<]*?)<\/span>/gi, "$1");
+    if (s === before) break;
+  }
 
-  return Array.from(template.content.childNodes).map(walk).join("");
+  // Strip any other tags as a safety net. The character class is a single-quantifier match —
+  // no ambiguity → no backtracking → linear time.
+  // eslint-disable-next-line sonarjs/slow-regex
+  s = s.replace(/<[^>]+>/g, "");
+  // Decode the basic entities our escapeHtml emits, so HTML in the editable round-trips clean.
+  s = s
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+  return s;
 };

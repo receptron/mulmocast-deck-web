@@ -27,9 +27,14 @@ const emit = defineEmits<{
     :style="{ left: `${x}px`, top: `${y}px` }"
     @mousedown.prevent
   >
-    <button type="button" class="rounded px-2 py-1 font-bold hover:bg-stone-100" title="Bold (**)" @click="emit('bold')">B</button>
-    <button type="button" class="rounded px-2 py-1 font-bold italic text-amber-600 hover:bg-stone-100" title="Emphasis (*)" @click="emit('emphasis')">
-      em
+    <button type="button" class="rounded px-2 py-1 font-bold hover:bg-stone-100" title="Bold (** … **) — click again to remove" @click="emit('bold')">B</button>
+    <button
+      type="button"
+      class="rounded px-2 py-1 font-extrabold text-amber-500 hover:bg-stone-100"
+      title="Highlight in amber (* … *) — click again to remove"
+      @click="emit('emphasis')"
+    >
+      ★
     </button>
     <div class="mx-1 h-4 w-px bg-stone-200"></div>
     <button
@@ -50,6 +55,8 @@ const emit = defineEmits<{
       @click="emit('color', c)"
     ></button>
     <div class="mx-1 h-4 w-px bg-stone-200"></div>
-    <button type="button" class="rounded px-2 py-1 text-stone-500 hover:bg-stone-100" title="Clear formatting" @click="emit('clear')">×</button>
+    <button type="button" class="rounded px-2 py-1 text-stone-500 hover:bg-stone-100" title="Clear all formatting in selection" @click="emit('clear')">
+      ×
+    </button>
   </div>
 </template>
