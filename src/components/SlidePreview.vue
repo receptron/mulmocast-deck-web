@@ -88,18 +88,13 @@ const wireEditing = (iframe: HTMLIFrameElement) => {
       hideToolbar();
       return;
     }
-    e.preventDefault();
     if (target.getAttribute("contenteditable") === "true") return;
     target.setAttribute("contenteditable", "true");
-    target.focus();
     lastEditableEl.value = target;
-    const sel = doc.getSelection();
-    if (sel) {
-      sel.removeAllRanges();
-      const range = doc.createRange();
-      range.selectNodeContents(target);
-      sel.addRange(range);
-    }
+    // Don't auto-select-all on enter — leaving the click's natural caret position avoids the
+    // "user types a key and nukes all formatting" contenteditable footgun. The element is
+    // focused implicitly by the click; we only ensure focus if it didn't take.
+    if (doc.activeElement !== target) target.focus();
     reposition(iframe);
   });
 
