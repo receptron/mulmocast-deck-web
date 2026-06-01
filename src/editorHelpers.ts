@@ -186,3 +186,43 @@ export const getByPath = <T = unknown>(root: unknown, path: string): T | undefin
   }
   return cursor as T | undefined;
 };
+
+/**
+ * Convert an editable text element's innerHTML back into the deck's inline-markup syntax,
+ * round-tripping the renderInlineMarkup pass. We honor:
+ *   <strong> / <b>          → **bold**
+ *   <em> (any class)        → *emphasis*
+ *   <span class="text-d-X"> → {X:text}   (X ∈ inlineColorKeys)
+ *   <br>                    → newline
+ * Anything else is stripped to its text content. Safe for round-tripping the formatter — typing
+ * `**foo**` raw, blurring, and re-clicking should produce the same source.
+ */
+const INLINE_COLOR_KEYS = new Set(["primary", "accent", "success", "warning", "danger", "info", "highlight"]);
+
+export const htmlToMarkup = (html: string): string => {
+  // Use a detached <template> in any window we can grab. Prefer the global document.
+  const doc = typeof document !== "undefined" ? document : null;
+  if (!doc) return html;
+  const template = doc.createElement("template");
+  template.innerHTML = html;
+
+  const walk = (node: Node): string => {
+    if (node.nodeType === 3) return node.nodeValue ?? "";
+    if (node.nodeType !== 1) return "";
+    const el = node as Element;
+    const tag = el.tagName.toLowerCase();
+    if (tag === "br") return "\n";
+    const inner = Array.from(el.childNodes).map(walk).join("");
+    if (tag === "strong" || tag === "b") return `**${inner}**`;
+    if (tag === "em" || tag === "i") return `*${inner}*`;
+    if (tag === "span") {
+      // Match the `text-d-<color>` class injected by renderInlineMarkup.
+      const cls = el.getAttribute("class") ?? "";
+      const m = /text-d-([a-z]+)/.exec(cls);
+      if (m && INLINE_COLOR_KEYS.has(m[1])) return `{${m[1]}:${inner}}`;
+    }
+    return inner;
+  };
+
+  return Array.from(template.content.childNodes).map(walk).join("");
+};

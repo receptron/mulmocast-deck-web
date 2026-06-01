@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch, onBeforeUnmount } from "vue";
+import { computed, ref, onBeforeUnmount } from "vue";
 import { generateSlideHTML, type SlideLayout, type SlideTheme } from "@mulmocast/deck";
-import { setByPath } from "../editorHelpers";
+import { setByPath, htmlToMarkup, ACCENT_COLORS } from "../editorHelpers";
+import InlineToolbar from "./InlineToolbar.vue";
 
 const props = defineProps<{
   slide: SlideLayout;
@@ -20,14 +21,57 @@ const html = computed(() => {
 
 const iframeRef = ref<HTMLIFrameElement | null>(null);
 
-// Reverse-walk the rendered HTML for the data-mulmo-path the user clicked, then write the new
-// text back to the slide JSON. Edits happen on blur / Enter — re-rendering on each keystroke
-// would reset the cursor.
+// Floating toolbar state. Coordinates are in parent-page (viewport) space.
+const toolbar = ref<{ x: number; y: number; visible: boolean }>({ x: 0, y: 0, visible: false });
+const lastEditableEl = ref<HTMLElement | null>(null);
+
+const hideToolbar = () => {
+  toolbar.value = { x: 0, y: 0, visible: false };
+};
+
+/**
+ * Read the current selection inside the iframe, translate its bounding rect to parent-viewport
+ * coordinates, and position the toolbar above it. Hides if the selection is empty / collapsed.
+ */
+const reposition = (iframe: HTMLIFrameElement) => {
+  const doc = iframe.contentDocument;
+  if (!doc) return;
+  const sel = doc.getSelection();
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+    hideToolbar();
+    return;
+  }
+  // The selection must be inside a [data-mulmo-path] element for our wrap helpers to make sense.
+  const anchor = sel.anchorNode;
+  const editable = anchor instanceof Element ? anchor.closest("[data-mulmo-path]") : (anchor?.parentElement?.closest("[data-mulmo-path]") ?? null);
+  if (!editable || editable.getAttribute("contenteditable") !== "true") {
+    hideToolbar();
+    return;
+  }
+  const rect = sel.getRangeAt(0).getBoundingClientRect();
+  const iframeRect = iframe.getBoundingClientRect();
+  const TOOLBAR_HEIGHT = 36;
+  const x = iframeRect.left + rect.left;
+  const y = Math.max(0, iframeRect.top + rect.top - TOOLBAR_HEIGHT - 4);
+  toolbar.value = { x, y, visible: true };
+};
+
+const commit = (el: HTMLElement) => {
+  const path = el.getAttribute("data-mulmo-path");
+  if (!path) return;
+  // Round-trip the rendered HTML back to deck inline markup so toolbar-applied <strong>/<em>/<span>
+  // round-trips through renderInlineMarkup cleanly.
+  const text = htmlToMarkup(el.innerHTML).replace(/\r/g, "");
+  el.removeAttribute("contenteditable");
+  hideToolbar();
+  const next = setByPath(props.slide, path, text);
+  emit("update", next as SlideLayout);
+};
+
 const wireEditing = (iframe: HTMLIFrameElement) => {
   const doc = iframe.contentDocument;
   if (!doc || !doc.body) return;
 
-  // Hover outline + edit cursor on any editable target.
   if (!doc.getElementById("__mulmo_edit_style")) {
     const style = doc.createElement("style");
     style.id = "__mulmo_edit_style";
@@ -38,23 +82,17 @@ const wireEditing = (iframe: HTMLIFrameElement) => {
     doc.head?.appendChild(style);
   }
 
-  const commit = (el: HTMLElement) => {
-    const path = el.getAttribute("data-mulmo-path");
-    if (!path) return;
-    const text = el.innerText.replace(/\r/g, "");
-    el.removeAttribute("contenteditable");
-    const next = setByPath(props.slide, path, text);
-    emit("update", next as SlideLayout);
-  };
-
   doc.body.addEventListener("click", (e) => {
     const target = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-mulmo-path]");
-    if (!target) return;
+    if (!target) {
+      hideToolbar();
+      return;
+    }
     e.preventDefault();
     if (target.getAttribute("contenteditable") === "true") return;
     target.setAttribute("contenteditable", "true");
     target.focus();
-    // Select all so typing replaces.
+    lastEditableEl.value = target;
     const sel = doc.getSelection();
     if (sel) {
       sel.removeAllRanges();
@@ -62,6 +100,7 @@ const wireEditing = (iframe: HTMLIFrameElement) => {
       range.selectNodeContents(target);
       sel.addRange(range);
     }
+    reposition(iframe);
   });
 
   doc.body.addEventListener(
@@ -70,7 +109,7 @@ const wireEditing = (iframe: HTMLIFrameElement) => {
       const target = e.target as HTMLElement | null;
       if (target?.getAttribute("contenteditable") === "true") commit(target);
     },
-    true, // capture — blur doesn't bubble
+    true,
   );
 
   doc.body.addEventListener("keydown", (e) => {
@@ -81,11 +120,15 @@ const wireEditing = (iframe: HTMLIFrameElement) => {
       target.blur();
     } else if (e.key === "Escape") {
       e.preventDefault();
-      // Revert: just remove editable; next render (from props) brings back the original.
       target.removeAttribute("contenteditable");
+      hideToolbar();
       target.blur();
     }
   });
+
+  // Selection inside the iframe → reposition the toolbar.
+  doc.addEventListener("selectionchange", () => reposition(iframe));
+  doc.addEventListener("scroll", () => reposition(iframe), true);
 };
 
 const onIframeLoad = () => {
@@ -94,22 +137,59 @@ const onIframeLoad = () => {
   wireEditing(iframe);
 };
 
-// When the slide content changes (from anywhere — Inspector, layout swap, etc.) we re-emit srcdoc,
-// which triggers iframe `load` again. The wireEditing handler reattaches per load.
-watch(html, () => {
-  // The iframe srcdoc re-sets on render; wireEditing reattaches on load.
-});
+// ─── toolbar actions ───
+const currentRange = (): { doc: Document; sel: Selection; range: Range } | null => {
+  const iframe = iframeRef.value;
+  const doc = iframe?.contentDocument;
+  const sel = doc?.getSelection();
+  if (!doc || !sel || sel.isCollapsed || sel.rangeCount === 0) return null;
+  return { doc, sel, range: sel.getRangeAt(0) };
+};
 
-onBeforeUnmount(() => {
-  // Listeners live in the iframe doc which is torn down with the iframe — nothing to clean up here.
-});
+const wrap = (tagName: string, className?: string) => {
+  const ctx = currentRange();
+  if (!ctx) return;
+  try {
+    const wrapper = ctx.doc.createElement(tagName);
+    if (className) wrapper.setAttribute("class", className);
+    ctx.range.surroundContents(wrapper);
+    // Move selection inside the wrapper so subsequent buttons compose.
+    ctx.sel.removeAllRanges();
+    const r = ctx.doc.createRange();
+    r.selectNodeContents(wrapper);
+    ctx.sel.addRange(r);
+  } catch {
+    // surroundContents throws when the range crosses element boundaries (e.g. partially-selected
+    // <strong>). Fall back to extract + wrap.
+    const frag = ctx.range.extractContents();
+    const wrapper = ctx.doc.createElement(tagName);
+    if (className) wrapper.setAttribute("class", className);
+    wrapper.appendChild(frag);
+    ctx.range.insertNode(wrapper);
+  }
+  reposition(iframeRef.value as HTMLIFrameElement);
+};
+
+const onBold = () => wrap("strong");
+const onEmphasis = () => wrap("em", "text-d-warning not-italic font-bold");
+const onColor = (color: (typeof ACCENT_COLORS)[number]) => wrap("span", `text-d-${color}`);
+const onClearFormat = () => {
+  const ctx = currentRange();
+  if (!ctx) return;
+  const text = ctx.range.toString();
+  ctx.range.deleteContents();
+  ctx.range.insertNode(ctx.doc.createTextNode(text));
+  reposition(iframeRef.value as HTMLIFrameElement);
+};
+
+onBeforeUnmount(() => hideToolbar());
 </script>
 
 <template>
   <div class="flex h-full flex-col p-6">
     <div class="mb-3 flex items-center justify-between">
       <h2 class="text-sm font-semibold tracking-wide text-stone-700">
-        Live preview <span class="text-[10px] font-normal text-stone-400">— click text to edit</span>
+        Live preview <span class="text-[10px] font-normal text-stone-400">— click text to edit, select for toolbar</span>
       </h2>
       <span class="text-xs text-stone-400">{{ slide.layout }}</span>
     </div>
@@ -123,5 +203,6 @@ onBeforeUnmount(() => {
         @load="onIframeLoad"
       />
     </div>
+    <InlineToolbar :x="toolbar.x" :y="toolbar.y" :visible="toolbar.visible" @bold="onBold" @emphasis="onEmphasis" @color="onColor" @clear="onClearFormat" />
   </div>
 </template>
