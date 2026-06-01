@@ -89,7 +89,7 @@ const moveSlide = (i: number, delta: number) => {
       />
     </aside>
     <main class="flex-1 min-w-0 bg-stone-100">
-      <SlidePreview v-if="selectedSlide" :slide="selectedSlide" :theme="theme" />
+      <SlidePreview v-if="selectedSlide" :slide="selectedSlide" :theme="theme" @update="updateSlide" />
       <div v-else class="flex h-full items-center justify-center text-stone-400">No slide selected</div>
     </main>
     <aside class="w-96 shrink-0 border-l border-stone-200 bg-white overflow-y-auto">
