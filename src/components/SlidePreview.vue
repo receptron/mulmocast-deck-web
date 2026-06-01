@@ -25,6 +25,59 @@ const iframeRef = ref<HTMLIFrameElement | null>(null);
 const toolbar = ref<{ x: number; y: number; visible: boolean }>({ x: 0, y: 0, visible: false });
 const lastEditableEl = ref<HTMLElement | null>(null);
 
+// FLIP animation snapshot. Filled by snapshotPositions() right before a reorder commit, consumed
+// by applyFLIP() on the next iframe load. We match the new DOM's items by `data-mulmo-item-path`
+// to their previous bounding rect, apply an inverse translate, then transition back to 0 so the
+// user sees a smooth move instead of a snap.
+const positionsBefore = new Map<string, { x: number; y: number }>();
+
+const snapshotPositions = () => {
+  const doc = iframeRef.value?.contentDocument;
+  if (!doc) return;
+  positionsBefore.clear();
+  doc.querySelectorAll<HTMLElement>("[data-mulmo-item-path]").forEach((el) => {
+    const path = el.getAttribute("data-mulmo-item-path");
+    if (!path) return;
+    const r = el.getBoundingClientRect();
+    positionsBefore.set(path, { x: r.left, y: r.top });
+  });
+};
+
+const applyFLIP = () => {
+  if (positionsBefore.size === 0) return;
+  const doc = iframeRef.value?.contentDocument;
+  if (!doc) {
+    positionsBefore.clear();
+    return;
+  }
+  doc.querySelectorAll<HTMLElement>("[data-mulmo-item-path]").forEach((el) => {
+    const path = el.getAttribute("data-mulmo-item-path");
+    if (!path) return;
+    const before = positionsBefore.get(path);
+    if (!before) return;
+    const r = el.getBoundingClientRect();
+    const dx = before.x - r.left;
+    const dy = before.y - r.top;
+    if (dx === 0 && dy === 0) return;
+    el.style.transition = "none";
+    el.style.transform = `translate(${dx}px, ${dy}px)`;
+    // Force reflow so the inverse position is committed before we transition back.
+    // Reading offsetWidth has the side effect of flushing layout; the value is discarded.
+    // eslint-disable-next-line sonarjs/void-use
+    void el.offsetWidth;
+    el.style.transition = "transform 280ms cubic-bezier(0.22, 0.61, 0.36, 1)";
+    el.style.transform = "";
+    // Clear inline styles after the transition so subsequent edits aren't impeded.
+    const cleanup = () => {
+      el.style.transition = "";
+      el.style.transform = "";
+      el.removeEventListener("transitionend", cleanup);
+    };
+    el.addEventListener("transitionend", cleanup);
+  });
+  positionsBefore.clear();
+};
+
 const hideToolbar = () => {
   toolbar.value = { x: 0, y: 0, visible: false };
 };
@@ -145,7 +198,12 @@ const wireEditing = (iframe: HTMLIFrameElement) => {
     const next = moveByPath(props.slide, dragFromPath, overPath);
     dragFromPath = null;
     doc.querySelectorAll(".mulmo-drop-target").forEach((el) => el.classList.remove("mulmo-drop-target"));
-    if (next !== props.slide) emit("update", next as SlideLayout);
+    if (next !== props.slide) {
+      // Snapshot positions BEFORE the iframe reloads with the new HTML, so applyFLIP() can
+      // compute deltas after the iframe load event fires.
+      snapshotPositions();
+      emit("update", next as SlideLayout);
+    }
   });
 
   doc.body.addEventListener("click", (e) => {
@@ -196,6 +254,8 @@ const onIframeLoad = () => {
   const iframe = iframeRef.value;
   if (!iframe) return;
   wireEditing(iframe);
+  // If a reorder just happened, play the FLIP transition now that the new DOM is in place.
+  applyFLIP();
 };
 
 // ─── toolbar actions ───
