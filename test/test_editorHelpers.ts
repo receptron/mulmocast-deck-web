@@ -129,6 +129,18 @@ test("htmlToMarkup: decodes basic entities", () => {
   assert.equal(htmlToMarkup("&lt;tag&gt; &amp; &#39;quote&#39;"), "<tag> & 'quote'");
 });
 
+test("htmlToMarkup: does not double-decode &amp;lt; (single pass)", () => {
+  // Without single-pass decoding, &amp;lt; would round-trip to "<" instead of "&lt;".
+  assert.equal(htmlToMarkup("&amp;lt;"), "&lt;");
+});
+
+test("htmlToMarkup: pathological broken-tag input leaves no executable tag", () => {
+  // The crucial safety property: no `<tag…>` pattern should survive that could be parsed
+  // as HTML by downstream consumers. (The leftover text doesn't matter — it can't run.)
+  const result = htmlToMarkup("safe<s<script>cript>still safe");
+  assert.ok(!/<[a-zA-Z][^>]*>/.test(result), `no surviving tag-like pattern in: ${result}`);
+});
+
 test("htmlToMarkup: unknown tags are stripped to text", () => {
   assert.equal(htmlToMarkup("<div>x</div>"), "x");
 });

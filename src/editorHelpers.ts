@@ -245,16 +245,34 @@ export const htmlToMarkup = (html: string): string => {
     if (s === before) break;
   }
 
-  // Strip any other tags as a safety net. The character class is a single-quantifier match —
-  // no ambiguity → no backtracking → linear time.
-  // eslint-disable-next-line sonarjs/slow-regex
-  s = s.replace(/<[^>]+>/g, "");
-  // Decode the basic entities our escapeHtml emits, so HTML in the editable round-trips clean.
-  s = s
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
+  // Strip any other tags as a safety net. Loop until no further tags survive — this protects
+  // against pathological inputs like `<s<script>cript>` where a single pass would leave
+  // `<script>` behind. In practice innerHTML from contenteditable is well-formed and one pass
+  // is enough, but the loop is cheap and shuts CodeQL's incomplete-sanitization rule up.
+  let prev = "";
+  while (prev !== s) {
+    prev = s;
+    // The character class is a single-quantifier match — no ambiguity → linear time.
+    // eslint-disable-next-line sonarjs/slow-regex
+    s = s.replace(/<[^>]+>/g, "");
+  }
+  // Decode the basic entities our escapeHtml emits, in a SINGLE pass so an input like
+  // `&amp;lt;` lands as `&lt;` (literal), not as `<` (double-unescape).
+  s = s.replace(/&(amp|lt|gt|quot|#39);/g, (_match, name: string) => {
+    switch (name) {
+      case "amp":
+        return "&";
+      case "lt":
+        return "<";
+      case "gt":
+        return ">";
+      case "quot":
+        return '"';
+      case "#39":
+        return "'";
+      default:
+        return _match;
+    }
+  });
   return s;
 };
