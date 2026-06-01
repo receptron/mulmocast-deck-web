@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ref } from "vue";
 import type { SlideLayout } from "@mulmocast/deck";
 import { LAYOUT_TYPES } from "../editorHelpers";
 
@@ -13,12 +14,43 @@ const emit = defineEmits<{
   remove: [index: number];
   duplicate: [index: number];
   move: [index: number, delta: number];
+  /** Reorder a slide by an absolute from / to index (HTML5 drag). */
+  reorder: [from: number, to: number];
 }>();
 
 const labelOf = (s: SlideLayout, i: number): string => {
   if ("title" in s && typeof s.title === "string" && s.title) return s.title;
   if (s.layout === "bigQuote" && s.quote) return s.quote.slice(0, 40);
   return `Slide ${i + 1}`;
+};
+
+// ─── HTML5 drag handlers ───
+const dragFrom = ref<number | null>(null);
+const dragOver = ref<number | null>(null);
+
+const onDragStart = (e: DragEvent, i: number) => {
+  dragFrom.value = i;
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", String(i));
+  }
+};
+const onDragOver = (e: DragEvent, i: number) => {
+  if (dragFrom.value === null || dragFrom.value === i) return;
+  e.preventDefault();
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+  dragOver.value = i;
+};
+const onDrop = (e: DragEvent, i: number) => {
+  if (dragFrom.value === null || dragFrom.value === i) return;
+  e.preventDefault();
+  emit("reorder", dragFrom.value, i);
+  dragFrom.value = null;
+  dragOver.value = null;
+};
+const onDragEnd = () => {
+  dragFrom.value = null;
+  dragOver.value = null;
 };
 </script>
 
@@ -49,8 +81,15 @@ const labelOf = (s: SlideLayout, i: number): string => {
         :class="[
           'group flex items-center justify-between gap-1 border-l-2 px-3 py-2 text-sm cursor-pointer',
           i === selectedIndex ? 'border-stone-900 bg-stone-100 text-stone-900' : 'border-transparent text-stone-600 hover:bg-stone-50',
+          dragOver === i && dragFrom !== null && dragFrom !== i ? 'bg-emerald-50 border-emerald-500' : '',
+          dragFrom === i ? 'opacity-40' : '',
         ]"
+        :draggable="true"
         @click="emit('select', i)"
+        @dragstart="onDragStart($event, i)"
+        @dragover="onDragOver($event, i)"
+        @drop="onDrop($event, i)"
+        @dragend="onDragEnd"
       >
         <div class="min-w-0 flex-1">
           <div class="truncate font-medium">{{ labelOf(s, i) }}</div>

@@ -73,6 +73,15 @@ const moveSlide = (i: number, delta: number) => {
   const newIndex = Math.max(0, Math.min(next.length - 1, i + delta));
   setIndex(newIndex);
 };
+
+const reorderSlide = (from: number, to: number) => {
+  if (from === to) return;
+  const next = props.slides.slice();
+  const [el] = next.splice(from, 1);
+  next.splice(to, 0, el);
+  emitSlides(next);
+  setIndex(to);
+};
 </script>
 
 <template>
@@ -86,6 +95,7 @@ const moveSlide = (i: number, delta: number) => {
         @remove="removeSlide"
         @duplicate="duplicateSlide"
         @move="moveSlide"
+        @reorder="reorderSlide"
       />
     </aside>
     <main class="flex-1 min-w-0 bg-stone-100">
