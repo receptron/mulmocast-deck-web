@@ -3,6 +3,20 @@ import { ref } from "vue";
 import type { SlideLayout } from "@mulmocast/deck";
 import { LAYOUT_TYPES } from "../editorHelpers";
 
+// Stable identity per slide object so TransitionGroup can FLIP-animate reorders.
+// Each unique slide reference gets a unique key for its lifetime in this list.
+const idMap = new WeakMap<SlideLayout, string>();
+let nextId = 0;
+const idOf = (slide: SlideLayout): string => {
+  let id = idMap.get(slide);
+  if (!id) {
+    nextId += 1;
+    id = `slide-${nextId}`;
+    idMap.set(slide, id);
+  }
+  return id;
+};
+
 defineProps<{
   slides: SlideLayout[];
   selectedIndex: number;
@@ -74,12 +88,12 @@ const onDragEnd = () => {
         <option v-for="l in LAYOUT_TYPES" :key="l" :value="l">{{ l }}</option>
       </select>
     </header>
-    <ul class="flex-1 overflow-y-auto py-2">
+    <TransitionGroup tag="ul" name="slide" class="flex-1 overflow-y-auto py-2">
       <li
         v-for="(s, i) in slides"
-        :key="i"
+        :key="idOf(s)"
         :class="[
-          'group flex items-center justify-between gap-1 border-l-2 px-3 py-2 text-sm cursor-pointer',
+          'slide-item group flex items-center justify-between gap-1 border-l-2 px-3 py-2 text-sm cursor-pointer',
           i === selectedIndex ? 'border-stone-900 bg-stone-100 text-stone-900' : 'border-transparent text-stone-600 hover:bg-stone-50',
           dragOver === i && dragFrom !== null && dragFrom !== i ? 'bg-emerald-50 border-emerald-500' : '',
           dragFrom === i ? 'opacity-40' : '',
@@ -133,6 +147,35 @@ const onDragEnd = () => {
           </button>
         </div>
       </li>
-    </ul>
+    </TransitionGroup>
   </div>
 </template>
+
+<style scoped>
+/* FLIP animation on reorder. Vue's TransitionGroup auto-detects v-move when keyed items shuffle. */
+.slide-move {
+  transition: transform 220ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+/* Removed items keep their slot during the transition so siblings move smoothly into place. */
+.slide-leave-active {
+  position: absolute;
+  transition:
+    opacity 160ms ease,
+    transform 200ms ease;
+  pointer-events: none;
+  width: calc(100% - 1px);
+}
+.slide-leave-to {
+  opacity: 0;
+  transform: translateX(-12px);
+}
+.slide-enter-active {
+  transition:
+    opacity 180ms ease,
+    transform 220ms ease;
+}
+.slide-enter-from {
+  opacity: 0;
+  transform: translateX(-12px);
+}
+</style>
