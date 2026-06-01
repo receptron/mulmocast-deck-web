@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert";
 
-import { parsePath, getByPath, setByPath, htmlToMarkup, moveInArray, clone, makeBlock, makeSlide } from "../src/editorHelpers";
+import { parsePath, getByPath, setByPath, htmlToMarkup, moveInArray, clone, makeBlock, makeSlide, splitItemPath, moveByPath } from "../src/editorHelpers";
 
 // ─── parsePath ───
 
@@ -273,4 +273,64 @@ test("makeBlock: bullets has one item", () => {
 
 test("makeBlock: tag", () => {
   assert.deepEqual(makeBlock("tag"), { type: "tag", text: "TAG" });
+});
+
+// ─── splitItemPath ───
+
+test("splitItemPath: top-level array item", () => {
+  assert.deepEqual(splitItemPath("stats[0]"), { parent: "stats", index: 0 });
+});
+
+test("splitItemPath: deeply nested", () => {
+  assert.deepEqual(splitItemPath("columns[0].content[1].items[2]"), { parent: "columns[0].content[1].items", index: 2 });
+});
+
+test("splitItemPath: not an array path returns null", () => {
+  assert.equal(splitItemPath("title"), null);
+  assert.equal(splitItemPath("eyebrow.label"), null);
+});
+
+// ─── moveByPath ───
+
+test("moveByPath: swap two stats", () => {
+  const slide = { stats: [{ value: "a" }, { value: "b" }, { value: "c" }] };
+  const next = moveByPath(slide, "stats[0]", "stats[2]");
+  assert.deepEqual(next.stats, [{ value: "b" }, { value: "c" }, { value: "a" }]);
+  assert.deepEqual(slide.stats, [{ value: "a" }, { value: "b" }, { value: "c" }], "original untouched");
+});
+
+test("moveByPath: move bullet inside nested content", () => {
+  const slide = {
+    columns: [
+      {
+        content: [{ type: "bullets", items: ["a", "b", "c", "d"] }],
+      },
+    ],
+  };
+  const next = moveByPath(slide, "columns[0].content[0].items[3]", "columns[0].content[0].items[0]");
+  assert.deepEqual(next.columns[0].content[0].items, ["d", "a", "b", "c"]);
+});
+
+test("moveByPath: cross-parent move returns original ref", () => {
+  const slide = { stats: [{ value: "a" }], items: [{ title: "x" }] };
+  const next = moveByPath(slide, "stats[0]", "items[0]");
+  assert.equal(next, slide);
+});
+
+test("moveByPath: same index is identity", () => {
+  const slide = { stats: [{ value: "a" }, { value: "b" }] };
+  const next = moveByPath(slide, "stats[1]", "stats[1]");
+  assert.equal(next, slide);
+});
+
+test("moveByPath: out-of-range index returns original ref", () => {
+  const slide = { stats: [{ value: "a" }] };
+  const next = moveByPath(slide, "stats[0]", "stats[5]");
+  assert.equal(next, slide);
+});
+
+test("moveByPath: invalid path returns original ref", () => {
+  const slide = { stats: [{ value: "a" }] };
+  const next = moveByPath(slide, "stats", "stats[0]");
+  assert.equal(next, slide);
 });

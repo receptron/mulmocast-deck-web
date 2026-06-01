@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onBeforeUnmount } from "vue";
 import { generateSlideHTML, type SlideLayout, type SlideTheme } from "@mulmocast/deck";
-import { setByPath, htmlToMarkup, ACCENT_COLORS } from "../editorHelpers";
+import { setByPath, htmlToMarkup, ACCENT_COLORS, moveByPath, splitItemPath } from "../editorHelpers";
 import InlineToolbar from "./InlineToolbar.vue";
 
 const props = defineProps<{
@@ -78,9 +78,75 @@ const wireEditing = (iframe: HTMLIFrameElement) => {
     style.textContent = `
       [data-mulmo-path]:hover { outline: 2px solid rgba(56,189,248,.55); outline-offset: 2px; cursor: text; }
       [data-mulmo-path][contenteditable="true"] { outline: 2px solid rgba(56,189,248,.9); outline-offset: 2px; box-shadow: 0 0 0 4px rgba(56,189,248,.15); }
+      [data-mulmo-item-path][draggable="true"] { cursor: grab; }
+      [data-mulmo-item-path].mulmo-dragging { opacity: 0.4; }
+      [data-mulmo-item-path].mulmo-drop-target { outline: 2px dashed rgba(16,185,129,.8); outline-offset: 2px; }
     `;
     doc.head?.appendChild(style);
   }
+
+  // Mark every list-item container draggable so the browser fires native drag events.
+  const enableDrag = () => {
+    doc.querySelectorAll<HTMLElement>("[data-mulmo-item-path]").forEach((el) => {
+      if (!el.hasAttribute("draggable")) el.setAttribute("draggable", "true");
+    });
+  };
+  enableDrag();
+  // The deck re-renders on every update — re-mark after each iframe load.
+  const observer = new MutationObserver(enableDrag);
+  observer.observe(doc.body, { childList: true, subtree: true });
+
+  // ─── drag-and-drop reorder of list items ───
+  let dragFromPath: string | null = null;
+
+  doc.body.addEventListener("dragstart", (e) => {
+    const target = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-mulmo-item-path]");
+    if (!target) return;
+    dragFromPath = target.getAttribute("data-mulmo-item-path");
+    target.classList.add("mulmo-dragging");
+    // The dataTransfer string is mostly cosmetic — we use dragFromPath above.
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", dragFromPath ?? "");
+    }
+  });
+
+  doc.body.addEventListener("dragend", (e) => {
+    const target = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-mulmo-item-path]");
+    target?.classList.remove("mulmo-dragging");
+    doc.querySelectorAll(".mulmo-drop-target").forEach((el) => el.classList.remove("mulmo-drop-target"));
+    dragFromPath = null;
+  });
+
+  doc.body.addEventListener("dragover", (e) => {
+    if (!dragFromPath) return;
+    const over = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-mulmo-item-path]");
+    if (!over) return;
+    const overPath = over.getAttribute("data-mulmo-item-path");
+    if (!overPath || overPath === dragFromPath) return;
+    // Only allow drop on a sibling — same parent array.
+    const from = splitItemPath(dragFromPath);
+    const to = splitItemPath(overPath);
+    if (!from || !to || from.parent !== to.parent) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+    // Clear previous highlight, set this one.
+    doc.querySelectorAll(".mulmo-drop-target").forEach((el) => el !== over && el.classList.remove("mulmo-drop-target"));
+    over.classList.add("mulmo-drop-target");
+  });
+
+  doc.body.addEventListener("drop", (e) => {
+    if (!dragFromPath) return;
+    const over = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-mulmo-item-path]");
+    if (!over) return;
+    const overPath = over.getAttribute("data-mulmo-item-path");
+    if (!overPath || overPath === dragFromPath) return;
+    e.preventDefault();
+    const next = moveByPath(props.slide, dragFromPath, overPath);
+    dragFromPath = null;
+    doc.querySelectorAll(".mulmo-drop-target").forEach((el) => el.classList.remove("mulmo-drop-target"));
+    if (next !== props.slide) emit("update", next as SlideLayout);
+  });
 
   doc.body.addEventListener("click", (e) => {
     const target = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-mulmo-path]");
