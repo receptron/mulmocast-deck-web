@@ -172,6 +172,37 @@ export const setByPath = <T>(root: T, path: string, value: unknown): T => {
   return copy;
 };
 
+/**
+ * Split an item path like `columns[0].content[1].items[2]` into:
+ *   { parent: "columns[0].content[1].items", index: 2 }
+ * Returns null if the path doesn't end in `[n]` (i.e. not an array item).
+ */
+export const splitItemPath = (path: string): { parent: string; index: number } | null => {
+  const m = /^(.*?)\[(\d+)\]$/.exec(path);
+  if (!m) return null;
+  return { parent: m[1].replace(/\.$/, ""), index: Number(m[2]) };
+};
+
+/**
+ * Move an array element inside a SlideLayout by from-path → to-path. Both paths must point
+ * at items in the same parent array (e.g. `stats[0]` and `stats[2]`). Returns a new SlideLayout
+ * or the original ref if the paths don't share a parent / aren't valid.
+ */
+export const moveByPath = <T>(root: T, fromPath: string, toPath: string): T => {
+  const from = splitItemPath(fromPath);
+  const to = splitItemPath(toPath);
+  if (!from || !to || from.parent !== to.parent) return root;
+  const parentArr = getByPath<unknown[]>(root, from.parent);
+  if (!Array.isArray(parentArr)) return root;
+  if (from.index < 0 || from.index >= parentArr.length) return root;
+  if (to.index < 0 || to.index >= parentArr.length) return root;
+  if (from.index === to.index) return root;
+  const next = clone(parentArr);
+  const [el] = next.splice(from.index, 1);
+  next.splice(to.index, 0, el);
+  return setByPath(root, from.parent, next);
+};
+
 /** Deep-get `slide.<path>`. Returns undefined if anything along the way is missing. */
 export const getByPath = <T = unknown>(root: unknown, path: string): T | undefined => {
   const segments = parsePath(path);

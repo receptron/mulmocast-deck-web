@@ -297,10 +297,10 @@
     "@jridgewell/resolve-uri" "^3.1.0"
     "@jridgewell/sourcemap-codec" "^1.4.14"
 
-"@mulmocast/deck@^0.6.0":
-  version "0.6.0"
-  resolved "https://npm.flatt.tech/@mulmocast/deck/-/deck-0.6.0.tgz#e157be65be85b7d7c71083dab1d5f8858d665156"
-  integrity sha512-EoLLHHYSLS+w1JW+rDDGBnlA2zHsGoNt813WTAbNPW4uZOaOrVH8MsEng8o1aV5NRgk4S7l/ri1tXBirkD6ZvA==
+"@mulmocast/deck@^0.7.0":
+  version "0.7.0"
+  resolved "https://npm.flatt.tech/@mulmocast/deck/-/deck-0.7.0.tgz#53ee2d9cab4f6df2b2984fcf9029aaf4ba39c744"
+  integrity sha512-m2DJ5tipv3ug+KwsH4dWad2lID4nVzjhaNN8dDyosKARfG1sPsVjU3Ti4rJRAwi9d84N3bkKWocGlRS8C4NxXw==
   dependencies:
     zod "^4.4.3"
 
