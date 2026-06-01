@@ -191,6 +191,28 @@ export const getByPath = <T = unknown>(root: unknown, path: string): T | undefin
 const INLINE_COLOR_KEYS = new Set(["primary", "accent", "success", "warning", "danger", "info", "highlight"]);
 
 /**
+ * Replacement for an `<em>` / `<i>` tag. Deck's em regex requires word boundaries on both sides
+ * (`(?<![*\w])\*` … `\*(?!\w)`) and non-space at the inner edges (`\*(?!\s)` … `(?<!\s)\*`).
+ * When any of those conditions wouldn't be satisfied, falling back to `{warning:…}` keeps the
+ * markup round-trippable — deck's color regex `\{([a-z]+):(.+?)\}` has no boundary constraint.
+ *
+ * Visual difference: `*x*` renders as amber bold, `{warning:x}` renders as amber-colored only
+ * (no bold). Acceptable as a fallback since the alternative is a parse failure where the user
+ * sees literal asterisks.
+ */
+const emReplace = (match: string, _tag: string, inner: string, offset: number, full: string): string => {
+  const prevChar = full[offset - 1] ?? "";
+  const nextChar = full[offset + match.length] ?? "";
+  const isWord = (c: string) => /\w/.test(c);
+  const startsWithSpace = /^\s/.test(inner);
+  const endsWithSpace = /\s$/.test(inner);
+  if (isWord(prevChar) || isWord(nextChar) || startsWithSpace || endsWithSpace) {
+    return `{warning:${inner}}`;
+  }
+  return `*${inner}*`;
+};
+
+/**
  * Convert an editable element's innerHTML back into deck inline-markup syntax. Pure / DOM-free
  * so it can be unit-tested under `node:test`. Honors:
  *   <strong> / <b>           → **bold**
@@ -212,7 +234,7 @@ export const htmlToMarkup = (html: string): string => {
   for (let i = 0; i < 50; i++) {
     const before = s;
     s = s.replace(/<(strong|b)\b[^>]*>([^<]*?)<\/\1>/gi, "**$2**");
-    s = s.replace(/<(em|i)\b[^>]*>([^<]*?)<\/\1>/gi, "*$2*");
+    s = s.replace(/<(em|i)\b[^>]*>([^<]*?)<\/\1>/gi, emReplace);
     s = s.replace(/<span\b[^>]*class="([^"]*)"[^>]*>([^<]*?)<\/span>/gi, (_m, cls: string, text: string) => {
       const colorMatch = /\btext-d-([a-z]+)\b/.exec(cls);
       if (colorMatch && INLINE_COLOR_KEYS.has(colorMatch[1])) return `{${colorMatch[1]}:${text}}`;

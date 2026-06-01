@@ -169,6 +169,42 @@ test("htmlToMarkup: literal asterisks adjacent to inner tags are preserved", () 
   assert.equal(htmlToMarkup(input), "a *b* **c**");
 });
 
+// ─── em fallback to {warning:…} when deck's em regex wouldn't parse ───
+
+test("htmlToMarkup: em surrounded by word chars falls back to {warning:…}", () => {
+  // "Live alerts" — user selected "e al" inside the word → would emit Liv*e al*erts which deck
+  // can't parse as em (prev char "v" is \w + content has trailing/leading nothing but is mid-word).
+  const input = "Liv<em>e al</em>erts";
+  assert.equal(htmlToMarkup(input), "Liv{warning:e al}erts");
+});
+
+test("htmlToMarkup: em with leading space inner falls back", () => {
+  // deck's em requires \*(?!\s) — non-space after the opening *.
+  const input = "<em> hello</em>";
+  assert.equal(htmlToMarkup(input), "{warning: hello}");
+});
+
+test("htmlToMarkup: em with trailing space inner falls back", () => {
+  const input = "<em>hello </em>";
+  assert.equal(htmlToMarkup(input), "{warning:hello }");
+});
+
+test("htmlToMarkup: em at word-boundary stays as *…*", () => {
+  // " hello *world*" — space before * + word after * is fine.
+  const input = "say <em>hello</em>!";
+  assert.equal(htmlToMarkup(input), "say *hello*!");
+});
+
+test("htmlToMarkup: em at start of string stays as *…*", () => {
+  const input = "<em>hello</em> world";
+  assert.equal(htmlToMarkup(input), "*hello* world");
+});
+
+test("htmlToMarkup: em adjacent on right to word char falls back", () => {
+  const input = "<em>hi</em>there";
+  assert.equal(htmlToMarkup(input), "{warning:hi}there");
+});
+
 // ─── moveInArray ───
 
 test("moveInArray: shift right", () => {
