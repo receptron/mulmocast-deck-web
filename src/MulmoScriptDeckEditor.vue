@@ -49,10 +49,33 @@ const slideBeatIndices = computed<number[]>(() => {
 // reference-equality based diffing works.
 const slides = computed<SlideLayout[]>(() => slideBeatIndices.value.map((i) => props.script.beats![i].image!.slide as SlideLayout));
 
-// Theme priority: explicit prop > script.presentationStyle.slideParams.theme > script.slideParams.theme
-const effectiveTheme = computed<SlideTheme | undefined>(
-  () => props.theme ?? props.script.presentationStyle?.slideParams?.theme ?? props.script.slideParams?.theme,
-);
+// Theme priority — matches `mulmocast`'s slide renderer
+// (`utils/image_plugins/slide.ts:resolveTheme`) so the editor preview
+// stays in lock-step with what PDF / movie output will show:
+//
+//   1. Explicit `theme` prop — host pins a theme regardless of script content.
+//   2. `beats[*].image.theme` — per-beat override. Storyteller and
+//      generated decks (e.g. the bootcamp samples shipped with this
+//      repo) populate ONLY this slot; the previous priority missed it
+//      entirely and fell through to the default theme, producing a
+//      cream editor / themed renderer mismatch
+//      (`receptron/mulmoclaude#1622`).
+//   3. `script.presentationStyle.slideParams.theme` — deck-level default.
+//   4. `script.slideParams.theme` — legacy top-level slot.
+//   5. Whatever `DeckEditor`'s `defaultTheme` fallback hands back.
+//
+// `DeckEditor` takes a single deck-wide theme, so the per-beat lookup
+// picks the **first** slide beat's theme — exact match for the common
+// case where every beat shares one theme. Per-slide theming (different
+// theme per beat) is a separate, larger DeckEditor / SlidePreview
+// change tracked outside this fix.
+const effectiveTheme = computed<SlideTheme | undefined>(() => {
+  if (props.theme) return props.theme;
+  for (const beat of props.script.beats ?? []) {
+    if (beat?.image?.type === "slide" && beat.image.theme) return beat.image.theme;
+  }
+  return props.script.presentationStyle?.slideParams?.theme ?? props.script.slideParams?.theme;
+});
 
 const hiddenCount = computed(() => (props.script.beats?.length ?? 0) - slideBeatIndices.value.length);
 
