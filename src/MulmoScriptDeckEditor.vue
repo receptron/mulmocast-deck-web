@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { SlideLayout, SlideTheme } from "@mulmocast/deck";
+import { MulmoPresentationStyleMethods } from "mulmocast/browser";
 import DeckEditor from "./DeckEditor.vue";
 
 /**
@@ -49,10 +50,49 @@ const slideBeatIndices = computed<number[]>(() => {
 // reference-equality based diffing works.
 const slides = computed<SlideLayout[]>(() => slideBeatIndices.value.map((i) => props.script.beats![i].image!.slide as SlideLayout));
 
-// Theme priority: explicit prop > script.presentationStyle.slideParams.theme > script.slideParams.theme
-const effectiveTheme = computed<SlideTheme | undefined>(
-  () => props.theme ?? props.script.presentationStyle?.slideParams?.theme ?? props.script.slideParams?.theme,
-);
+// Theme priority — delegates to mulmocast's `getResolvedSlideTheme`
+// so the editor preview matches what the renderer (`slide.ts`) produces
+// for PDF / movie output. Priority is:
+//
+//   1. Explicit `theme` prop (host can pin a theme regardless of script content)
+//   2. `beat.image.theme` on the first slide beat (per-beat override —
+//      previously missed; the bootcamp / Storyteller scripts populate
+//      this and end up here)
+//   3. `script.slideParams.theme` (deck-level default)
+//   4. `slideThemes.corporate` (mulmocast's built-in fallback)
+//
+// `DeckEditor` accepts a single deck-wide theme, so this still derives
+// one theme — picking the first slide beat's theme matches the common
+// case where every beat shares the same theme. Per-slide theme support
+// (different theme per beat) is a separate, larger change to DeckEditor /
+// SlidePreview and tracked separately.
+//
+// `getResolvedSlideTheme`'s first arg is `presentationStyle`. mulmocast's
+// own renderer sets `context.presentationStyle = studio.script` when no
+// preset path is provided, so passing the script itself reproduces the
+// renderer's exact resolution.
+const effectiveTheme = computed<SlideTheme | undefined>(() => {
+  if (props.theme) return props.theme;
+  const firstSlideBeatIdx = slideBeatIndices.value[0];
+  const firstBeat = firstSlideBeatIdx !== undefined ? props.script.beats?.[firstSlideBeatIdx] : undefined;
+  if (firstBeat) {
+    // `getResolvedSlideTheme` is strict-typed against the full mulmocast
+    // schema, but our local `MulmoScriptShape` is intentionally a
+    // structural minimum so consumers don't have to depend on
+    // `@mulmocast/types`. The cast is at the boundary; the method
+    // only reads `slideParams?.theme` and `image?.theme`, both of
+    // which our shape declares with the same types.
+    return MulmoPresentationStyleMethods.getResolvedSlideTheme(
+      props.script as unknown as Parameters<typeof MulmoPresentationStyleMethods.getResolvedSlideTheme>[0],
+      firstBeat as unknown as Parameters<typeof MulmoPresentationStyleMethods.getResolvedSlideTheme>[1],
+    ) as SlideTheme;
+  }
+  // No slide beat to drive resolution (deck preview of an empty / mixed
+  // script). Fall back to the deck-level slot the renderer would also
+  // consult; deck-web's older default-theme fallback is then handled
+  // inside DeckEditor.
+  return props.script.presentationStyle?.slideParams?.theme ?? props.script.slideParams?.theme;
+});
 
 const hiddenCount = computed(() => (props.script.beats?.length ?? 0) - slideBeatIndices.value.length);
 
